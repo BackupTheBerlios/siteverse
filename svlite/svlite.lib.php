@@ -1,6 +1,6 @@
 <?php
 //
-// $Id: svlite.lib.php,v 1.3 2007/05/08 02:35:14 zaurum Exp $
+// $Id: svlite.lib.php,v 1.4 2007/05/14 12:27:16 zaurum Exp $
 // Author: Konstantin Boyandin <konstantin@boyandin.ru>
 //
 // This file is a part of SVLite MVC framework distribution
@@ -24,6 +24,9 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 //
 // $Log: svlite.lib.php,v $
+// Revision 1.4  2007/05/14 12:27:16  zaurum
+// Extended functionality, basic View and Controller
+//
 // Revision 1.3  2007/05/08 02:35:14  zaurum
 // Basic functionality
 //
@@ -50,13 +53,13 @@ function svlite_prolog() {
 //
     register_shutdown_function('svlite_epilog');
 //
-// register_globals are disabled, make sure we handle it anyway
-//
-    svlite_internal_purge_globals();
-//
 // Set up internal data. We use the only global var, $sv
 //
     svlite_internal_set_vars();
+//
+// register_globals are disabled, make sure we handle it anyway
+//
+    svlite_internal_purge_globals();
 //
 // Get control data fron .ini file (derived from script filename by replacing the extension with .ini)
 //
@@ -65,11 +68,14 @@ function svlite_prolog() {
 // MVC initialization
 //
     svlite_internal_init_mvc();
+}  
+
+function svlite_process() {
 //
 // Call controller and perform requrieed action
 //
     svlite_internal_controller();
-}  
+}
 
 /**
  * SVLite shutdown code
@@ -93,10 +99,12 @@ function svlite_epilog() {
  * Unset all the globals save superglobals
  */ 
 function svlite_internal_purge_globals() {
+    global $sv;
+
     if (ini_get('register_globals')) {
-        $keep = array('_ENV' => 1, '_GET' => 1, '_POST' => 1, '_COOKIE' => 1, '_FILES' => 1, '_SERVER' => 1, '_REQUEST' => 1, 'GLOBALS' => 1);
+// If not in 'keep' (precious) array, purge    
         foreach ($GLOBALS as $k => $v) {
-            if (!isset($keep[$k])) unset($GLOBALS[$k]);
+            if (!in_array($sv['keep'][$k])) unset($GLOBALS[$k]);
         }
     }
 }
@@ -115,11 +123,13 @@ function svlite_internal_set_vars() {
         'exit' => array(),
         'func' => array(),
         'get' => array(),
+        'headers' => array(),
         'ini' => array(),
         'path' => array(),
         'post' => array(),
         'system' => array(),
         'vars' => array(),
+        'keep' => array('sv', '_ENV', '_GET', '_POST', '_COOKIE', '_FILES', '_SERVER', '_REQUEST', 'GLOBALS')
     );
 // Set up paths
     $sv['path']['sv'] = dirname(__FILE__) . DIRECTORY_SEPARATOR;
@@ -137,7 +147,7 @@ function svlite_internal_set_vars() {
         $sv['get'][$k] = svlite_get_parameter($k, 'GET');
     }
     foreach (array_keys($_POST) as $k) {
-        $sv['post'][$k] = $this->get_parameter($k, 'POST');
+        $sv['post'][$k] = svlite_get_parameter($k, 'POST');
     }
     $sv['system']['method'] = strtolower($_SERVER["REQUEST_METHOD"]);
 // 'request' will refer to the actual request data
@@ -189,16 +199,63 @@ function svlite_internal_get_control_data() {
             $sv['ini'] = @parse_ini_file($inifile);
         }
     }
+// Validate paths
+    if (isset($sv['ini']['templates_dir']) && is_string($sv['ini']['templates_dir'])) {
+        $sv['ini']['templates_dir'] = svlite_check_path($sv['ini']['templates_dir']);
+    }
 // Apply defaults
     svlite_set_var_if_empty($sv['ini'], 'action_infix', 'action');
     svlite_set_var_if_empty($sv['ini'], 'action_var', 'action');
+    svlite_set_var_if_empty($sv['ini'], 'content_type', 'text/html; charset=utf-8');
     svlite_set_var_if_empty($sv['ini'], 'default_action', 'default');
     svlite_set_var_if_empty($sv['ini'], 'dbh_infix', 'dbh');
     svlite_set_var_if_empty($sv['ini'], 'filter_infix', 'filter');
     svlite_set_var_if_empty($sv['ini'], 'session_infix', 'session');
+    svlite_set_var_if_empty($sv['ini'], 'session_name', 'SVLITE');
     svlite_set_var_if_empty($sv['ini'], 'sv_prefix', 'svlite');
+    svlite_set_var_if_empty($sv['ini'], 'templates_dir', 'templates' . DIRECTORY_SEPARATOR);
+    svlite_set_var_if_empty($sv['ini'], 'use_compression', false);
+    svlite_set_var_if_empty($sv['ini'], 'use_session', true);
+    svlite_set_var_if_empty($sv['ini'], 'view_infix', 'view');
+// Define list of 'precious' names
+    if ((isset($sv['ini']['precious'])) && (!svlite_is_empty($sv['ini']['precious']))) {
+        $sv['keep'] = array_unique(array_merge($sv['keep'], split('[ ]*,[ ]*',$sv['ini']['precious'])));
+    }
 // Derive action handler name pattern
     $sv['func']['action_handler'] = $sv['ini']['sv_prefix'] . '_' . $sv['ini']['action_infix'] . '_%s'; 
+    $sv['func']['view_handler'] = $sv['ini']['sv_prefix'] . '_' . $sv['ini']['view_infix'] . '_%s_%s'; 
+}
+
+/**
+ * Checks path:
+ *   - adds closing directory separator
+ *   - checks for relative components; if present, returns empty string  
+ */ 
+function svlite_check_path($path) {
+    if (isset($path) && is_string($path)) {
+// Canonize slashes
+        $path = svlite_unify_dir_separators($path);
+// Add terminating slash
+        if (substr($path, -1) != DIRECTORY_SEPARATOR) {
+            $path .= DIRECTORY_SEPARATOR;
+// No relative paths allowed
+            if (svlite_is_relative_path($path)) {
+                $path = '';
+            }
+        }
+    }
+    return $path;
+}
+
+function svlite_unify_dir_separators($str) {
+    if (isset($str) && is_string($str)) {
+        return str_replace(
+            array("/", "\\"),
+            array(DIRECTORY_SEPARATOR, DIRECTORY_SEPARATOR),
+            $str
+        );
+    } else
+        return '';
 }
 
 function svlite_internal_init_mvc() {
@@ -209,6 +266,11 @@ function svlite_internal_init_mvc() {
         ob_start();
     }
 // Scan function namespace for filters and run filters
+// Start session
+    if ($sv['ini']['use_session']) {
+        session_name($sv['ini']['session_name']);
+        session_start();
+    }
 }
 
 function svlite_internal_register_error($errcode, $errstr) {
@@ -240,6 +302,17 @@ function svlite_internal_controller() {
 }
 
 /**
+ * Returns true if the string contains relative path specification
+ */ 
+function svlite_is_relative_path($path) {
+    if (isset($path) && is_string($path)) {
+        $rel = '..' . DIRECTORY_SEPARATOR;
+        return (false !== strstr($path, $rel));
+    } else
+        return false;
+}
+
+/**
  * Checks inout (GET/POST) data against regexp patterns
  * 
  * @param $arr  reference of array with regexp definitions
@@ -256,6 +329,9 @@ function svlite_internal_controller() {
  *     }
  *     if either of 'get'/'post' is missing, that method is
  *     unavailable (error)
+ *     'flags' is a string;
+ *        if contains 'A', array values are allowed
+ *     'regexp' is a regexp used to match  
  * @param $a   action name (key to the above array entry)
  * @param $purge default true  whether to remove the input parameter
  *     missing from definitions from the request vars (prevent input
@@ -267,11 +343,174 @@ function svlite_internal_controller() {
  *     false if wrong method or data structure error        
  */ 
 function svlite_check_input(&$arr, $a, $purge = true) {
-// Parameters check
+    global $sv;
+    $rc = true;
 
+// Parameters check
+    if (!is_array($arr)) {
+        svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ': not an array');
+        return false;
+    }
+// If such an action is defined, scan parameters
+    if (isset($arr[$a]) && (is_array($arr[$a]))) {
+        $method =& $sv['system']['method'];
+        if (isset($arr[$a][$method]) && (is_array($arr[$a][$method]))) {
+            $cdata =& $arr[$a][$method];
+            $rc = array();
+            foreach (array_keys($sv['request']) as $k) {
+// $k is var name, $v its value
+                $v =& $sv['request'][$k];
+                if (isset($cdata[$k]) && is_array($cdata[$k])) {
+// Match parameter against the regexp
+                    $marr =& $cdata[$k];
+                    $arrayallowed = (false !== strstr($marr[0], 'A'));
+                    if (is_array($v)) {
+                        if ($arrayallowed) {
+// Match every element of the array
+                            foreach (array_keys($v) as $kv) {
+                                if (!preg_match($marr[1], $v[$kv])) {
+                                    svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ": value of '$k':$kv is invalid");
+                                    $rc[$k] = "invalid value at $kv";
+                                }
+                            }
+                        } else {
+// Array not allowed - ad error record
+                            svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ": parameter '$k' may not be an array");
+                            $rc[$k] = 'array not allowed';
+                        }                                   
+                    } else {
+// Check the single value
+                        if (!preg_match($marr[1], $v)) {
+                            svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ": value of '$k' is invalid");
+                            $rc[$k] = 'invalid value';
+                        }
+                    }
+                } else {
+// Var missing from definition, purge it if required
+                    if ($purge) {
+                        $v = NULL;
+                        unset($v);
+                        unset($sv['request'][$k]);
+                    }
+                }
+            }
+// All checks passed
+            if (count($rc) <= 0) {
+                $rc = true;
+            }
+            return $rc;
+// Method exists, now scan the request data
+        } else {
+            svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ": no data for method '$method' of the action '$a'");
+            return false;
+        } 
+    } else {
+        svlite_internal_register_error(0, 'svlite_check_input' . ' ' . __LINE__ . ": no data for the action '$a'");
+        return false;
+    }
 }
 
 //
-// View calls
+// View calls: simple template engine
 //
+///////////////////////////////////// begin
+
+/**
+ * Assigns value to a template variable
+ *  
+ * @param $k  name of the variable
+ * @param 4v value to assign
+ */ 
+function svlite_view_simple_assign($k, $v) {
+    global $sv;
+
+    if (isset($k) && isset($v)) {
+        if (!svlite_is_empty($k)) {
+            if (!isset($sv['vars'][$k]))
+                $sv['vars'][$k] = $v;
+        }
+    }
+}
+
+/**
+ * Takes file from a template directory and processes it 
+ *  
+ * @param $tmplname name of the template file in
+ *   $sv['ini']['templates_dir']
+ * @returns processed template
+ */ 
+function svlite_view_simple_fetch($tmplname) {
+    global $sv;
+
+    if (isset($tmplname) && is_string($tmplname)) {
+// Sanity check
+        if (svlite_is_relative_path($tmplname)) {
+            svlite_internal_register_error(0, 'svlite_view_simple_fetch' . ' ' . __LINE__ . ": template name may not be relative");
+            return false;
+        }
+// Construct name
+        $fullname = svlite_unify_dir_separators(
+            $sv['path']['base'] . $sv['ini']['templates_dir'] . $tmplname
+        );
+// If file exists, process it
+        if (file_exists($fullname)) {
+            ob_start();
+            extract($sv['vars'], EXTR_SKIP);
+            require($fullname);
+            return ob_get_clean();
+        } else {
+            svlite_internal_register_error(0, 'svlite_view_simple_fetch' . ' ' . __LINE__ . ": template $tmplname does not exist");
+            return '';
+        }
+    } else
+        return false; 
+}
+
+/**
+ * Takes file from a template directory, processes it and
+ * sends to browser  
+ *  
+ * @param $tmplname name of the template file in
+ *   $sv['ini']['templates_dir']
+ */ 
+function svlite_view_simple_display($tmplname) {
+// Send headers, if any
+    svlite_view_simple_sendheaders();
+// Process and send template
+    if (isset($tmplname) && is_string($tmplname)) {
+        echo svlite_view_simple_fetch($tmplname);
+    }
+}
+
+/**
+ * Sets header to be sent from 'display' view call or similar call
+ * 
+ * @param $k header name
+ * @param $v header value   
+ */ 
+function svlite_view_simple_setheader($k, $v) {
+    global $sv;
+
+    if (isset($k) && isset($k) && is_string($k) && is_string($v)) {
+        $sv['headers'][$k] = $v;
+    }
+}
+
+/**
+ * Sends HTTP headers accumulated so far
+ */ 
+function svlite_view_simple_sendheaders() {
+    global $sv;
+
+    if (!isset($sv['headers']['Content-Type']) || !is_string($sv['headers']['Content-Type'])) {
+        $sv['headers']['Content-Type'] = $sv['ini']['content_type'];
+    }
+    foreach ($sv['headers'] as $k => $v) {
+        header("$k: $v");
+    }
+// Reset headers array
+    $sv['headers'] = array();
+}
+
+///////////////////////////////////// end
 ?>
