@@ -1,6 +1,6 @@
 <?php
 //
-// $Id: svlite.lib.php,v 1.4 2007/05/14 12:27:16 zaurum Exp $
+// $Id: svlite.lib.php,v 1.5 2007/05/16 09:03:24 zaurum Exp $
 // Author: Konstantin Boyandin <konstantin@boyandin.ru>
 //
 // This file is a part of SVLite MVC framework distribution
@@ -24,17 +24,11 @@
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
 //
 // $Log: svlite.lib.php,v $
+// Revision 1.5  2007/05/16 09:03:24  zaurum
+// Added redirection
+//
 // Revision 1.4  2007/05/14 12:27:16  zaurum
 // Extended functionality, basic View and Controller
-//
-// Revision 1.3  2007/05/08 02:35:14  zaurum
-// Basic functionality
-//
-// Revision 1.2  2007/02/20 01:38:50  zaurum
-// 2007-02-20 1
-//
-// Revision 1.1  2007/02/18 05:51:19  zaurum
-// Stub library file and license information added
 //
 //
 
@@ -409,6 +403,49 @@ function svlite_check_input(&$arr, $a, $purge = true) {
         return false;
     }
 }
+
+/**
+ * Redirects browser to a new page
+ * 
+ * @param $address URL or URI to redirect to  
+ */ 
+function svlite_http_redirect($address = "/") {
+    $https = false;
+    $stdport = true;
+    $srvport = $_SERVER['SERVER_PORT'];
+    $rc = "";
+    if (!preg_match("#^[a-z]+://#", $address)) {
+// http? https?
+        if (isset($_SERVER['SSL_PROTOCOL'])) {
+            $https = true;
+            if ($srvport != '443') {
+                $stdport = false;
+            }
+        } else {
+            if ($srvport != '80') {
+                $stdport = false;
+            }
+        }
+// Construct the URL
+        if ($https) {
+            $rc = "https://";
+        } else {
+            $rc = "http://";
+        }
+        $rc .= $_SERVER['SERVER_NAME'];
+        if (!$stdport) {
+            $rc .= ":$srvport";
+        }
+        if (substr($address, 0, 1) != "/") {
+            $rc .= "/";
+        }
+        $address = $rc . $address;
+    }
+    header("Location: $address");
+    ob_end_clean();
+    exit(0);
+}
+
 
 //
 // View calls: simple template engine
